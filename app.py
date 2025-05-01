@@ -15,7 +15,9 @@ try:
     # Load the specific model and tokenizer
     tokenizer = AutoTokenizer.from_pretrained("rahulk98/bert-finetuned-youtube_sentiment_analysis")
     model = AutoModelForSequenceClassification.from_pretrained("rahulk98/bert-finetuned-youtube_sentiment_analysis")
-    sentiment_pipeline = pipeline("text-classification", model=model, tokenizer=tokenizer, device_map="cpu")
+    # Explicitly move model to CPU and configure pipeline
+    model = model.to('cpu')
+    sentiment_pipeline = pipeline("text-classification", model=model, tokenizer=tokenizer, device='cpu')
 except Exception as e:
     st.error(f"Error initializing sentiment analysis pipeline: {e}. Please ensure you have the necessary libraries installed and the model is available.")
     st.error(
@@ -153,8 +155,7 @@ def generate_sentiment_visualization(df: pd.DataFrame): # -> px.bar.Figure:
                  color='Sentiment',
                  color_discrete_map={'POSITIVE': 'green',
                                      'NEGATIVE': 'red',
-                                     'No Sentiment': 'grey'
-                                     }) #Added a color for "No Sentiment"
+                                     'No Sentiment': 'grey'}) #Added a color for "No Sentiment"
 
     return fig
 
@@ -226,4 +227,3 @@ if __name__ == "__main__":
         except RuntimeError:  # 'There is no current event loop in thread'
             asyncio.set_event_loop(asyncio.new_event_loop())
         main()
-
