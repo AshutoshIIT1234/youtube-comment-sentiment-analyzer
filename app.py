@@ -8,16 +8,17 @@ import pandas as pd
 import plotly.express as px
 import asyncio  # Import asyncio
 import sys
-from urllib.parse import urlparse, parse_qs
+import torch
 
 # Initialize the Sentiment Analysis Pipeline
 try:
     # Load the specific model and tokenizer
     tokenizer = AutoTokenizer.from_pretrained("rahulk98/bert-finetuned-youtube_sentiment_analysis")
-    model = AutoModelForSequenceClassification.from_pretrained("rahulk98/bert-finetuned-youtube_sentiment_analysis")
-    # Explicitly move model to CPU and configure pipeline
-    model = model.to('cpu')
-    sentiment_pipeline = pipeline("text-classification", model=model, tokenizer=tokenizer, device='cpu')
+    # Initialize model on the meta device first
+    model = AutoModelForSequenceClassification.from_pretrained("rahulk98/bert-finetuned-youtube_sentiment_analysis", torch_dtype=torch.float32).to('meta')
+    # Move the model to the CPU using to_empty()
+    model = model.to_empty(device='cpu')
+    sentiment_pipeline = pipeline("text-classification", model=model, tokenizer=tokenizer, device_map="cpu")
 except Exception as e:
     st.error(f"Error initializing sentiment analysis pipeline: {e}. Please ensure you have the necessary libraries installed and the model is available.")
     st.error(
@@ -39,12 +40,16 @@ def clean_text(text: str) -> str:
 
 # Function to Analyze Sentiment of a Single Comment
 def analyze_comment_sentiment(comment: str) -> Dict:
+    if not comment or not isinstance(comment, str) or comment.isspace():
+        return {}
     cleaned_comment = clean_text(comment)
     if not cleaned_comment:
         return {}
     try:
-        result = sentiment_pipeline(cleaned_comment)[0]
-        return result
+        result = sentiment_pipeline(cleaned_comment)
+        if result and len(result) > 0:
+            return result[0]
+        return {}
     except Exception as e:
         st.error(f"Error analyzing comment: {e}.  Returning empty result for this comment.")
         return {}
@@ -62,7 +67,7 @@ def get_youtube_comments(video_id: str, api_key: str, max_results: int = 100) ->
     Retrieves comments from a YouTube video using the YouTube Data API.
 
     Args:
-        video_id (str): The ID of the YouTube video.
+        video_id (str): The ID or URL of the YouTube video.
         api_key (str): Your YouTube Data API key.
         max_results (int, optional): The maximum number of comments to retrieve. Defaults to 100.
             Maximum is 50, and if the user provides a number greater than 50, it will be set to 50.
@@ -72,6 +77,10 @@ def get_youtube_comments(video_id: str, api_key: str, max_results: int = 100) ->
     """
     comments = []
     try:
+        # Extract video ID from URL if needed
+        if "youtube.com" in video_id or "youtu.be" in video_id:
+            video_id = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', video_id).group(1)
+            
         youtube = build("youtube", "v3", developerKey=api_key)
         if max_results > 50:
             max_results = 50
@@ -89,12 +98,8 @@ def get_youtube_comments(video_id: str, api_key: str, max_results: int = 100) ->
             comments.append(comment_text)
 
     except HttpError as e:
-        if e.resp.status == 404:
-            st.error(f"Error: The video ID '{video_id}' could not be found. Please check the ID and try again.")
-            return []
-        else:
-            st.error(f"YouTube API Error: {e}")
-            return []  # Return an empty list in case of an error
+        st.error(f"YouTube API Error: {e}")
+        return []  # Return an empty list in case of an error
     except Exception as e:
         st.error(f"Unexpected error: {e}")
         return []
@@ -132,7 +137,7 @@ def create_sentiment_dataframe(comments: List[str], sentiment_results: List[Dict
     return df
 
 
-def generate_sentiment_visualization(df: pd.DataFrame): # -> px.bar.Figure:
+def generate_sentiment_visualization(df: pd.DataFrame) -> 'plotly.graph_objects.Figure':
     """
     Generates a Plotly bar chart visualizing the sentiment distribution from the DataFrame.
 
@@ -140,7 +145,7 @@ def generate_sentiment_visualization(df: pd.DataFrame): # -> px.bar.Figure:
         df (pd.DataFrame): A DataFrame with 'Sentiment' and 'Score' columns.
 
     Returns:
-        plotly.graph_objs._figure.Figure: A Plotly bar chart. # Changed return type annotation
+        px.bar.Figure: A Plotly bar chart.
     """
     if df.empty:
         fig = px.bar() # Return empty plot
@@ -167,33 +172,20 @@ def main():
     """
     st.title("YouTube Comment Sentiment Analyzer")
 
-    # Sidebar for user input
-    youtube_api_key = st.sidebar.text_input("Enter your YouTube Data API Key:", type="password")
-    video_id_or_url = st.sidebar.text_input("Enter the YouTube Video ID or URL:")
+    # Get API key from environment variable or sidebar input
+    youtube_api_key = os.getenv('YOUTUBE_API_KEY')
+    if not youtube_api_key:
+        youtube_api_key = st.sidebar.text_input("Enter your YouTube Data API Key:", type="password")
+    video_id = st.sidebar.text_input("Enter the YouTube Video ID:")
     max_comments = st.sidebar.slider("Max Comments", min_value=1, max_value=500, value=100, step=10) #Added a slider
 
     if st.sidebar.button("Analyze"):
         if not youtube_api_key:
             st.error("Please enter your YouTube Data API key.")
             return
-        if not video_id_or_url:
-            st.error("Please enter a YouTube Video ID or URL.")
+        if not video_id:
+            st.error("Please enter a YouTube Video ID.")
             return
-
-        # Extract video ID if it's a URL
-        if "youtube.com" in video_id_or_url:
-            try:
-                parsed_url = urlparse(video_id_or_url)
-                query_params = parse_qs(parsed_url.query)
-                video_id = query_params.get("v", [None])[0]  # Get the 'v' parameter
-                if not video_id:
-                    st.error("Invalid YouTube URL.  Could not extract video ID.")
-                    return
-            except Exception:
-                st.error("Error parsing YouTube URL. Please enter a valid URL or Video ID.")
-                return
-        else:
-            video_id = video_id_or_url # Assume it is a video ID
 
         st.info("Fetching comments from YouTube...")
         comments = get_youtube_comments(video_id, youtube_api_key, max_comments) # Pass max_comments
