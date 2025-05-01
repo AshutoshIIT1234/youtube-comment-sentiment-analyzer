@@ -1,0 +1,8 @@
+streamlit
+transformers
+google-api-python-client
+pandas
+plotly
+asyncio
+urllib3
+torch
