@@ -102,8 +102,4 @@ The application includes error handling for:
    - Wait for the build process to complete
    - Your app will be live at a unique URL
 
-Note: Make sure your `app.py` reads the API key from environment variables:
-```python
-import os
-api_key = os.getenv('YOUTUBE_API_KEY')
-```
+
